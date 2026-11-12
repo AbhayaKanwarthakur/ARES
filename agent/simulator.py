@@ -15,6 +15,7 @@ from datetime import datetime
 import numpy as np
 import pandas as pd
 
+from .event_schema import validate_event
 from .features import DATA_DIR, extract_features
 
 LOG_PATH = os.path.join(DATA_DIR, "security.log")
@@ -23,7 +24,8 @@ DOC_NETS = ["192.0.2", "198.51.100", "203.0.113"]
 
 TRAINING_KINDS = ["Normal Traffic", "Brute Force", "Port Scan", "SQL Injection",
                   "DDoS", "Suspicious Login", "Unknown Suspicious"]
-KINDS = TRAINING_KINDS + ["Novel Attack"]   # "Novel Attack" is NEVER in the training data
+KINDS = TRAINING_KINDS + ["Novel Attack", "Traffic Spike", "Traffic Flood",
+                          "Legitimate Unusual Activity"]
 
 
 def new_ip(rng=None):
@@ -125,6 +127,16 @@ def generate_events(kind, n_events=20, intensity=5, variation=0.15, src_ip=None,
             add(t, port, "TCP", "traffic", plen=plen * U(.9, 1.1), sp=J(0.02) * U(.7, 1.3),
                 pps=pps * U(.8, 1.2), dur=dur * U(.8, 1.2), req=3)
 
+    elif kind in {"Traffic Spike", "Legitimate Unusual Activity", "Traffic Flood"}:
+        # A benign burst is intentionally above the baseline spike threshold.
+        pps = {"Traffic Spike": 700, "Legitimate Unusual Activity": 700,
+               "Traffic Flood": 4500}[kind] * s
+        for _ in range(n):
+            t += J(0.08 if kind == "Traffic Flood" else 0.5) * U(.7, 1.3)
+            add(t, 443, "HTTP", "traffic", plen=J(700) * U(.8, 1.2),
+                sp=J(0.03) * U(.8, 1.2), pps=J(pps) * U(.8, 1.2),
+                dur=J(2) * U(.8, 1.2), req=15 if kind == "Traffic Flood" else 2)
+
     else:                                     # Normal Traffic
         for i in range(n):
             t += J(2.0) * U(.5, 2)
@@ -137,12 +149,13 @@ def generate_events(kind, n_events=20, intensity=5, variation=0.15, src_ip=None,
             else:
                 add(t, port, proto, "http", plen=J(700) * U(.3, 1.6), sp=J(0.03) * U(.5, 1.5),
                     pps=J(25) * U(.5, 1.5), dur=J(8) * U(.3, 2), req=int(rng.integers(1, 5)))
-    return evs
+    return [validate_event(event) for event in evs]
 
 
 # --------------------------------------------------------------------------- demo app
 def process_event(ev):
     """What the (fake) application does with one event. Pure function."""
+    ev = dict(validate_event(ev))
     if ev["event_type"] == "login":
         ok = FAKE_USERS.get(ev.get("username")) == ev.get("secret")
         ev["outcome"] = "login_ok" if ok else "login_failed"

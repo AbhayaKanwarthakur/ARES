@@ -13,9 +13,17 @@ import streamlit as st
 
 from agent.detector import MODEL_PATH, ensure_model
 from agent.learner import adaptation_stats, pending_count, retrain
+from agent.runtime_mode import get_runtime_mode, require_demo_mode
 from agent.memory import Memory
 from agent.pipeline import run_agent
+from agent.settings import SETTINGS_PATH, load_settings, save_settings
+from agent.testing_mode import run_test_campaign
 from agent.simulator import KINDS, LOG_PATH, DemoApp, generate_events, new_batch_id, new_ip
+
+runtime_mode = get_runtime_mode()
+if runtime_mode == "production":
+    raise RuntimeError("The synthetic dashboard is disabled in production mode. Use the production API service instead.")
+require_demo_mode()
 
 st.set_page_config(page_title="Adaptive Security Agent - SOC", layout="wide")
 
@@ -91,6 +99,11 @@ def timeline_html(rows):
 
 
 # --------------------------------------------------------------------------- setup
+settings = load_settings()
+dashboard_settings = settings["dashboard"]
+unknown_kinds = [preset["kind"] for preset in dashboard_settings["quick_launch"] if preset["kind"] not in KINDS]
+if unknown_kinds:
+    raise ValueError(f"Unknown quick-launch scenario(s) in {SETTINGS_PATH}: {', '.join(unknown_kinds)}")
 if not os.path.exists(MODEL_PATH):
     with st.spinner("First run: generating the synthetic dataset and training the baseline model..."):
         ensure_model()
@@ -101,10 +114,104 @@ for k, v in {"last": None, "last_events": None, "last_ip": None, "last_kind": No
 st.markdown(CSS, unsafe_allow_html=True)
 
 with st.sidebar:
+    st.markdown("## Agent settings")
+    st.caption(f"Saved in `{SETTINGS_PATH}`")
+    with st.form("agent_settings"):
+        pace = st.checkbox("Show agent 'thinking' delay", value=dashboard_settings["thinking_delay_enabled"],
+                           help="Cosmetic pacing so the audience can follow each step. Turn off for raw speed.")
+        thinking_delay = st.slider("Agent analysis delay per step (seconds)", 0.0, 1.0,
+                                   float(dashboard_settings["thinking_delay_seconds"]), 0.02)
+        animation_delay = st.slider("Dashboard step animation delay (seconds)", 0.0, 1.0,
+                                    float(dashboard_settings["step_animation_delay_seconds"]), 0.02)
+        every = st.slider("Auto-retrain every N labelled experiences (0 = off)", 0, 30,
+                          int(dashboard_settings["auto_retrain_every"]))
+        confidence_threshold = st.slider("Unknown confidence threshold", 0.30, 0.95,
+                                         float(settings["detector"]["confidence_threshold"]), 0.01,
+                                         help="Below this Random Forest confidence, detection uses the existing unknown path.")
+        outlier_threshold = st.slider("Unknown novelty distance", 0.5, 10.0,
+                                      float(settings["detector"]["outlier_threshold"]), 0.1,
+                                      help="Above this distance from known classes, detection uses the existing unknown path.")
+        match_threshold = st.slider("Memory match threshold", 0.50, 1.00,
+                                    float(settings["analysis"]["memory_match_threshold"]), 0.01,
+                                    help="Similarity required to use the existing FAST_MEMORY path.")
+        default_events = st.slider("Replay default event count", 5, 60,
+                                   int(dashboard_settings["default_event_count"]))
+        default_intensity = st.slider("Replay default intensity", 1, 10,
+                                      int(dashboard_settings["default_intensity"]))
+        default_variation = st.slider("Replay default variation (%)", 0, 100,
+                                      round(dashboard_settings["default_variation"] * 100), 5)
+        preset_columns = ["Label", "Scenario", "Events", "Intensity", "Variation (%)", "Modified"]
+        preset_rows = [
+            {"Label": preset["label"], "Scenario": preset["kind"], "Events": preset["events"],
+             "Intensity": preset["intensity"], "Variation (%)": round(preset["variation"] * 100),
+             "Modified": preset["mutated"]}
+            for preset in dashboard_settings["quick_launch"]
+        ]
+        edited_presets = st.data_editor(
+            pd.DataFrame(preset_rows, columns=preset_columns), num_rows="dynamic", hide_index=True,
+            column_config={
+                "Label": st.column_config.TextColumn(required=True),
+                "Scenario": st.column_config.SelectboxColumn(options=KINDS, required=True),
+                "Events": st.column_config.NumberColumn(min_value=3, max_value=60, step=1, required=True),
+                "Intensity": st.column_config.NumberColumn(min_value=1, max_value=10, step=1, required=True),
+                "Variation (%)": st.column_config.NumberColumn(min_value=0, max_value=100, step=5, required=True),
+                "Modified": st.column_config.CheckboxColumn(),
+            },
+            key="quick_launch_editor",
+        )
+        save_runtime_settings = st.form_submit_button("Save settings", type="primary")
+    if save_runtime_settings:
+        quick_launch = []
+        preset_error = None
+        try:
+            for index, row in enumerate(edited_presets.to_dict("records"), start=1):
+                if all(pd.isna(value) for value in row.values()):
+                    continue
+                if any(pd.isna(row[key]) for key in preset_columns):
+                    raise ValueError(f"Quick-launch row {index} has an empty field.")
+                for key in ("Events", "Intensity"):
+                    if not float(row[key]).is_integer():
+                        raise ValueError(f"Quick-launch row {index} '{key}' must be a whole number.")
+                quick_launch.append({
+                    "label": str(row["Label"]).strip(),
+                    "kind": str(row["Scenario"]),
+                    "events": int(row["Events"]),
+                    "intensity": int(row["Intensity"]),
+                    "variation": float(row["Variation (%)"]) / 100,
+                    "mutated": bool(row["Modified"]),
+                })
+        except (TypeError, ValueError, OverflowError) as error:
+            preset_error = str(error)
+        if preset_error:
+            st.error(f"Could not save quick-launch presets: {preset_error}")
+        elif any(preset["kind"] not in KINDS for preset in quick_launch):
+            st.error("Every quick-launch scenario must be one of the available simulated scenarios.")
+        else:
+            updated_settings = {
+                "version": settings["version"],
+                "detector": {
+                    "confidence_threshold": confidence_threshold,
+                    "outlier_threshold": outlier_threshold,
+                },
+                "analysis": {"memory_match_threshold": match_threshold},
+                "dashboard": {
+                    "thinking_delay_enabled": pace,
+                    "thinking_delay_seconds": thinking_delay,
+                    "step_animation_delay_seconds": animation_delay,
+                    "auto_retrain_every": every,
+                    "default_event_count": default_events,
+                    "default_intensity": default_intensity,
+                    "default_variation": default_variation / 100,
+                    "quick_launch": quick_launch,
+                },
+            }
+            try:
+                save_settings(updated_settings)
+            except (OSError, ValueError) as error:
+                st.error(f"Could not save settings: {error}")
+            else:
+                st.rerun()
     st.markdown("## Controls")
-    pace = st.toggle("Show agent 'thinking' delay", value=True,
-                     help="Cosmetic pacing so the audience can follow each step. Turn off for raw speed.")
-    every = st.slider("Auto-retrain model every N labelled experiences (0 = off)", 0, 30, 10)
     st.caption(f"Pending labelled experiences: **{pending_count(mem)}**")
     if st.button("Retrain model now"):
         res = retrain(mem, "manual")
@@ -150,7 +257,8 @@ for c, (l, v, s, col) in zip(cols, cells):
     c.markdown(kpi(l, v, s, col), unsafe_allow_html=True)
 st.write("")
 
-tab_lab, tab_tl, tab_an, tab_mem = st.tabs(["Demo Attack Lab", "Learning Timeline", "Analytics & Adaptation", "Memory"])
+tab_lab, tab_test, tab_tl, tab_an, tab_mem = st.tabs(
+    ["Demo Attack Lab", "Testing Mode", "Learning Timeline", "Analytics & Adaptation", "Memory"])
 
 # --------------------------------------------------------------------------- attack launcher
 def launch(kind, n, intensity, variation, mutated, reuse_ip, area):
@@ -177,43 +285,49 @@ def launch(kind, n, intensity, variation, mutated, reuse_ip, area):
             shown.append(s)
             chain.markdown(steps_html(shown), unsafe_allow_html=True)
             if pace:
-                time.sleep(0.45)
+                time.sleep(settings["dashboard"]["step_animation_delay_seconds"])
 
-        ss.last = run_agent(mem, bid, kind, deliberate=pace, on_step=on_step, retrain_every=every)
+        ss.last = run_agent(
+            mem, bid, kind, deliberate=pace, on_step=on_step, retrain_every=every,
+            confidence_threshold=settings["detector"]["confidence_threshold"],
+            outlier_threshold=settings["detector"]["outlier_threshold"],
+            match_threshold=settings["analysis"]["memory_match_threshold"],
+            thinking_delay_seconds=settings["dashboard"]["thinking_delay_seconds"],
+        )
     ss.last_events = pd.DataFrame(rows)
     st.rerun()
 
-
-DEFAULT_N = {"Brute Force": 12, "Port Scan": 25, "SQL Injection": 10, "DDoS": 15, "Novel Attack": 10,
-             "Normal Traffic": 12, "Suspicious Login": 10, "Unknown Suspicious": 12}
 
 with tab_lab:
     st.markdown("### Demo Attack Lab")
     st.caption("Safe, controlled, local-only. Each button generates synthetic events, feeds them to a sandbox demo app, "
                "and the agent reacts. Use the same button twice to see the agent recognise a repeat.")
     request = None
-    buttons = [("Simulate Brute Force", "Brute Force"), ("Simulate Port Scan", "Port Scan"),
-               ("Simulate SQL Injection Attempt", "SQL Injection"), ("Simulate DDoS-like Traffic Spike", "DDoS"),
-               ("Simulate Unknown/Novel Attack", "Novel Attack"), ("Generate Normal Traffic", "Normal Traffic")]
     reuse = st.checkbox("Reuse the previous attacker IP (shows the simulated blocklist protecting the app)")
-    bcols = st.columns(6)
-    for c, (label, kind) in zip(bcols, buttons):
-        if c.button(label, key="btn_" + kind):
-            request = dict(kind=kind, n=DEFAULT_N[kind], intensity=5, variation=0.15, mutated=False)
+    quick_launch = dashboard_settings["quick_launch"]
+    for start in range(0, len(quick_launch), 6):
+        bcols = st.columns(min(6, len(quick_launch) - start))
+        for c, preset in zip(bcols, quick_launch[start:start + 6]):
+            if c.button(preset["label"], key=f"btn_{start}_{preset['label']}"):
+                request = dict(kind=preset["kind"], n=preset["events"], intensity=preset["intensity"],
+                               variation=preset["variation"], mutated=preset["mutated"])
 
     st.markdown("#### Attack Replay")
     r1, r2, r3, r4 = st.columns(4)
     rkind = r1.selectbox("Attack type", KINDS, index=KINDS.index("Brute Force"))
-    rint = r2.slider("Intensity", 1, 10, 5)
-    rn = r3.slider("Number of events", 5, 60, 20)
-    rvar = r4.slider("Variation level", 0, 100, 15, format="%d%%")
+    rint = r2.slider("Intensity", 1, 10, int(dashboard_settings["default_intensity"]))
+    rn = r3.slider("Number of events", 5, 60, int(dashboard_settings["default_event_count"]))
+    rvar = r4.slider("Variation level", 0, 100,
+                     round(dashboard_settings["default_variation"] * 100), format="%d%%")
     r5, r6 = st.columns([1, 1])
     rmut = r5.checkbox("Apply structural modification (slower / different port / obfuscated)")
     if r6.button("RUN ATTACK", type="primary"):
         request = dict(kind=rkind, n=rn, intensity=rint, variation=rvar / 100, mutated=rmut)
     if st.button("Inject new attack (modified variant of the last attack)"):
         inj = ss.last_kind if ss.last_kind not in (None, "Normal Traffic") else "Brute Force"
-        request = dict(kind=inj, n=15, intensity=5, variation=0.3, mutated=True)
+        request = dict(kind=inj, n=dashboard_settings["default_event_count"],
+                       intensity=dashboard_settings["default_intensity"],
+                       variation=dashboard_settings["default_variation"], mutated=True)
 
     live = st.container()
     if request:
@@ -226,6 +340,63 @@ with tab_lab:
         if ss.last_events is not None:
             with st.expander("Raw events from the last run"):
                 st.dataframe(ss.last_events, hide_index=True)
+
+# --------------------------------------------------------------------------- testing mode
+with tab_test:
+        st.markdown("### Testing Mode")
+        st.warning(
+            "**Sandbox simulation only:** the automated attacker creates synthetic events for the "
+            "in-process demo application. The agent analyzes each scenario and applies its simulated "
+            "response. No real system, IP, service, or network is contacted."
+        )
+        test_scenarios = st.multiselect(
+            "Synthetic scenarios",
+            options=KINDS,
+            default=["Brute Force", "Port Scan", "SQL Injection", "DDoS", "Novel Attack", "Normal Traffic"],
+            help="These are built-in simulator scenarios, not real attack tools or external targets.",
+        )
+        test_rounds = st.slider("Rounds per scenario", 1, 5, 1, key="testing_rounds")
+        test_events = st.slider("Synthetic events per scenario", 5, 40, 12, key="testing_events")
+        test_count = len(test_scenarios) * test_rounds
+        st.caption(f"{test_count} simulated test cases (maximum 20 per run). Each case uses a fresh documentation-range source IP.")
+        if st.button("Run sandbox test", type="primary", disabled=test_count == 0 or test_count > 20):
+            progress = st.progress(0.0, text="Preparing local simulation...")
+            current = st.empty()
+
+            def update_test_progress(completed, total, row):
+                progress.progress(completed / total, text=f"Sandbox test {completed}/{total}")
+                current.caption(
+                    f"Round {row['round']}: {row['scenario']} -> {row['response']} "
+                    f"({'contained' if row['contained'] else 'not contained / no analysis'})"
+                )
+
+            test_results = run_test_campaign(
+                mem, test_scenarios, test_rounds, test_events, log_path=LOG_PATH,
+                retrain_every=every,
+                confidence_threshold=settings["detector"]["confidence_threshold"],
+                outlier_threshold=settings["detector"]["outlier_threshold"],
+                match_threshold=settings["analysis"]["memory_match_threshold"],
+                thinking_delay_seconds=settings["dashboard"]["thinking_delay_seconds"],
+                on_trial=update_test_progress,
+            )
+            ss.testing_results = test_results
+            st.success(f"Completed {len(test_results)} simulated cases. See results below.")
+
+        test_results = ss.get("testing_results", [])
+        if test_results:
+            results_df = pd.DataFrame(test_results)
+            cases, contained = len(results_df), int(results_df["contained"].sum())
+            threats = int((results_df["scenario"] != "Normal Traffic").sum())
+            response_successes = int(results_df["response_success"].sum())
+            metric_cols = st.columns(3)
+            metric_cols[0].metric("Simulated cases", cases)
+            metric_cols[1].metric("Threats contained (simulated)", f"{contained}/{threats}" if threats else "—")
+            metric_cols[2].metric("Response success rate", f"{response_successes / cases:.0%}" if cases else "—")
+            st.dataframe(
+                results_df[["round", "scenario", "source_ip", "classification", "risk",
+                            "response", "response_success", "contained", "status"]],
+                hide_index=True,
+            )
 
 # --------------------------------------------------------------------------- learning timeline
 with tab_tl:

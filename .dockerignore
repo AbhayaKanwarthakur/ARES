@@ -1,0 +1,15 @@
+.git
+.venv
+__pycache__
+*.py[cod]
+data/*
+!data/attacks.csv
+models/*
+!models/api-detector.joblib
+tests
+smoke_test.py
+train_rl.py
+*.db
+*.log
+.env
+secrets

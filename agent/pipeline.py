@@ -2,8 +2,8 @@
 import json
 import time
 
-from .analyzer import analyze
-from .detector import get_detector
+from .analyzer import MATCH_T, analyze
+from .detector import CONF_T, OUTLIER_T, get_detector
 from .features import extract_features
 from .learner import learn, maybe_retrain
 from .planner import plan_response
@@ -13,7 +13,9 @@ from .simulator import LOG_PATH, read_batch
 PACE = 0.22   # seconds of visible "thinking" per analysis step (cosmetic, can be switched off)
 
 
-def run_agent(mem, batch_id, truth, deliberate=False, on_step=None, log_path=LOG_PATH, retrain_every=10):
+def run_agent(mem, batch_id, truth, deliberate=False, on_step=None, log_path=LOG_PATH, retrain_every=10,
+              confidence_threshold=CONF_T, outlier_threshold=OUTLIER_T, match_threshold=MATCH_T,
+              thinking_delay_seconds=PACE):
     t0, steps, ui = time.perf_counter(), [], [0.0]   # ui = time spent inside the dashboard callback (excluded)
 
     def emit(key, title, lines):
@@ -40,15 +42,16 @@ def run_agent(mem, batch_id, truth, deliberate=False, on_step=None, log_path=LOG
         return {"dropped": True, "steps": steps, "src_ip": src}
 
     feats = extract_features(delivered)
-    det = get_detector().detect(feats)                              # 2. DETECT
+    det = get_detector().detect(feats, confidence_threshold, outlier_threshold)  # 2. DETECT
     emit("detect", "DETECTION (ML model)",
          [f"Prediction: {det['attack_type']}  |  confidence {det['confidence']:.0%}  |  initial risk {det['risk']}",
           f"Raw model label: {det['raw_label']}  |  novelty distance {det['novelty']}"
-          + (f"  |  UNKNOWN because {det['unknown_reason']}" if det["is_unknown"] else "")])
+          + (f"  |  UNKNOWN because {det['unknown_reason']}" if det["is_unknown"] else ""),
+          f"Rule baseline: {det['rule_based']['label']} - {det['rule_based']['reason']}"])
 
-    ana = analyze(mem, feats, det)                                  # 3. ANALYZE
+    ana = analyze(mem, feats, det, match_threshold)                 # 3. ANALYZE
     if deliberate:
-        time.sleep(PACE * ana["analysis_steps"])
+        time.sleep(thinking_delay_seconds * ana["analysis_steps"])
     emit("analyze", f"ANALYSIS - path: {ana['path']} ({ana['analysis_steps']} steps)",
          ana["evidence"] + [f"Steps executed: {' -> '.join(ana['trace'])}",
                             f"Final classification: {ana['final_type']} | confidence {ana['final_conf']:.0%} | "

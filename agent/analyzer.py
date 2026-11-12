@@ -37,7 +37,7 @@ def describe(f):
     return ", ".join(t) or "no strong standard indicators"
 
 
-def analyze(mem, feats, det):
+def analyze(mem, feats, det, match_threshold=MATCH_T):
     vec = to_vector(feats)
     ranked = mem.rank_patterns(vec)
     best, sim = ranked[0] if ranked else (None, 0.0)
@@ -46,14 +46,14 @@ def analyze(mem, feats, det):
     anomaly = min(1.0, max(0.0, (nov - 1.5) / 5))
     ev = [f"Behaviour profile: {traits}."]
     pattern, recognized = None, False
-    closest = (f"Closest memory: '{best['name']}' at {sim:.0%} similarity (below the {MATCH_T:.0%} match threshold)."
+    closest = (f"Closest memory: '{best['name']}' at {sim:.0%} similarity (below the {match_threshold:.0%} match threshold)."
                if best else "Attack memory is empty - nothing to compare with.")
 
     if label == "Normal Traffic":
         path, final_type, final_conf = "BASELINE", label, conf
         ev.append("Matches the normal-traffic baseline.")
     elif det["is_unknown"]:
-        if best and sim >= MATCH_T:
+        if best and sim >= match_threshold:
             path, final_type, pattern, recognized = "FAST_MEMORY", best["base_type"], best, True
             pc = best["confidence"]
             final_conf = round(pc + 0.5 * (0.99 - pc), 3)
@@ -67,7 +67,7 @@ def analyze(mem, feats, det):
             ev.append(closest)
             ev.append("Treating it as a potential new attack: profiling behaviour and scoring risk.")
     else:
-        same = best is not None and sim >= MATCH_T and best["base_type"] == label
+        same = best is not None and sim >= match_threshold and best["base_type"] == label
         if same:
             path, final_type, pattern, recognized = "FAST_MEMORY", label, best, True
             final_conf = round(min(0.99, conf + 0.5 * (0.99 - conf) * sim), 3)

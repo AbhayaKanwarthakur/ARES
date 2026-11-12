@@ -1,0 +1,173 @@
+{
+  "seed": 7,
+  "timesteps": 256,
+  "eval_episodes": 4,
+  "heldout_seeds": [
+    100007,
+    100008,
+    100009,
+    100010
+  ],
+  "scenario_mix": [
+    "Normal Traffic",
+    "Traffic Spike",
+    "Legitimate Unusual Activity",
+    "Port Scan",
+    "Brute Force",
+    "Traffic Flood",
+    "DDoS"
+  ],
+  "trained_policy": {
+    "episodes": 4,
+    "mean_reward": -0.6000000476837154,
+    "std_reward": 7.274613391789284,
+    "containment_rate": 0.0,
+    "false_positive_actions": 8,
+    "action_frequencies": {
+      "monitor": 0,
+      "alert": 32,
+      "simulated_rate_limit": 0,
+      "simulated_temporary_block": 0,
+      "human_review": 0
+    },
+    "episode_outcomes": [
+      {
+        "seed": 100007,
+        "scenario": "Legitimate Unusual Activity",
+        "reward": -13.200000047683716,
+        "threat": false,
+        "contained": false,
+        "false_positive_actions": 8,
+        "action_frequencies": {
+          "monitor": 0,
+          "alert": 8,
+          "simulated_rate_limit": 0,
+          "simulated_temporary_block": 0,
+          "human_review": 0
+        }
+      },
+      {
+        "seed": 100008,
+        "scenario": "DDoS",
+        "reward": 3.5999999523162844,
+        "threat": true,
+        "contained": false,
+        "false_positive_actions": 0,
+        "action_frequencies": {
+          "monitor": 0,
+          "alert": 8,
+          "simulated_rate_limit": 0,
+          "simulated_temporary_block": 0,
+          "human_review": 0
+        }
+      },
+      {
+        "seed": 100009,
+        "scenario": "Port Scan",
+        "reward": 3.5999999523162844,
+        "threat": true,
+        "contained": false,
+        "false_positive_actions": 0,
+        "action_frequencies": {
+          "monitor": 0,
+          "alert": 8,
+          "simulated_rate_limit": 0,
+          "simulated_temporary_block": 0,
+          "human_review": 0
+        }
+      },
+      {
+        "seed": 100010,
+        "scenario": "DDoS",
+        "reward": 3.5999999523162844,
+        "threat": true,
+        "contained": false,
+        "false_positive_actions": 0,
+        "action_frequencies": {
+          "monitor": 0,
+          "alert": 8,
+          "simulated_rate_limit": 0,
+          "simulated_temporary_block": 0,
+          "human_review": 0
+        }
+      }
+    ]
+  },
+  "fixed_rule_policy": {
+    "episodes": 4,
+    "mean_reward": -2.4875000536441805,
+    "std_reward": 1.65203476440473,
+    "containment_rate": 1.0,
+    "false_positive_actions": 0,
+    "action_frequencies": {
+      "monitor": 14,
+      "alert": 0,
+      "simulated_rate_limit": 13,
+      "simulated_temporary_block": 0,
+      "human_review": 5
+    },
+    "episode_outcomes": [
+      {
+        "seed": 100007,
+        "scenario": "Legitimate Unusual Activity",
+        "reward": 0.0,
+        "threat": false,
+        "contained": false,
+        "false_positive_actions": 0,
+        "action_frequencies": {
+          "monitor": 8,
+          "alert": 0,
+          "simulated_rate_limit": 0,
+          "simulated_temporary_block": 0,
+          "human_review": 0
+        }
+      },
+      {
+        "seed": 100008,
+        "scenario": "DDoS",
+        "reward": -2.650000059604645,
+        "threat": true,
+        "contained": true,
+        "false_positive_actions": 0,
+        "action_frequencies": {
+          "monitor": 3,
+          "alert": 0,
+          "simulated_rate_limit": 5,
+          "simulated_temporary_block": 0,
+          "human_review": 0
+        }
+      },
+      {
+        "seed": 100009,
+        "scenario": "Port Scan",
+        "reward": -4.650000095367432,
+        "threat": true,
+        "contained": true,
+        "false_positive_actions": 0,
+        "action_frequencies": {
+          "monitor": 0,
+          "alert": 0,
+          "simulated_rate_limit": 3,
+          "simulated_temporary_block": 0,
+          "human_review": 5
+        }
+      },
+      {
+        "seed": 100010,
+        "scenario": "DDoS",
+        "reward": -2.650000059604645,
+        "threat": true,
+        "contained": true,
+        "false_positive_actions": 0,
+        "action_frequencies": {
+          "monitor": 3,
+          "alert": 0,
+          "simulated_rate_limit": 5,
+          "simulated_temporary_block": 0,
+          "human_review": 0
+        }
+      }
+    ]
+  },
+  "checkpoint": "C:\\Users\\HP\\OneDrive\\Desktop\\ideathon project\\adaptive-security-agent\\models\\ares_dqn.zip"
+}

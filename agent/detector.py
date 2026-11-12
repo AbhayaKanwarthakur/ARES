@@ -7,18 +7,21 @@ Random Forests are over-confident on data unlike anything they were trained on, 
 outlier check is what catches truly novel attacks.
 """
 import os
+import warnings
 
 import joblib
 import numpy as np
 import pandas as pd
+import sklearn
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import accuracy_score
 from sklearn.model_selection import train_test_split
 
-from .features import DATA_DIR, FEATURES, MODEL_DIR, PROTO_CODE, to_vector
+from .features import DATA_DIR, FEATURES, MODEL_DIR, PROTO_CODE, detect_rules, to_vector
 
-MODEL_PATH = os.path.join(MODEL_DIR, "detector.joblib")
-DATA_PATH = os.path.join(DATA_DIR, "attacks.csv")
+MODEL_PATH = os.environ.get("ARES_MODEL_PATH", os.path.join(MODEL_DIR, "detector.joblib"))
+DATA_PATH = os.environ.get("ARES_DATA_PATH", os.path.join(DATA_DIR, "attacks.csv"))
+MODEL_FORMAT_VERSION = 1
 CONF_T = 0.65       # below this the verdict is "unknown"
 OUTLIER_T = 3.0     # novelty distance above this is "unlike anything known"
 
@@ -76,9 +79,16 @@ def fit_and_save(base_df, exp_df=None):
     V, y = vectors(train), train["attack_type"].values
     stats = {c: (V[y == c].mean(0), V[y == c].std(0)) for c in clf.classes_}
     os.makedirs(MODEL_DIR, exist_ok=True)
-    joblib.dump({"model": clf, "class_stats": stats, "holdout_acc": acc,
-                 "n_train": len(train)}, MODEL_PATH)
-    return {"holdout_acc": acc, "classes": list(clf.classes_), "n_train": len(train)}
+    payload = {
+        "model": clf,
+        "class_stats": stats,
+        "holdout_acc": acc,
+        "n_train": len(train),
+        "artifact_format": MODEL_FORMAT_VERSION,
+        "sklearn_version": sklearn.__version__,
+    }
+    joblib.dump(payload, MODEL_PATH)
+    return {"holdout_acc": acc, "classes": list(clf.classes_), "n_train": len(train), "sklearn_version": sklearn.__version__}
 
 
 def ensure_model():
@@ -97,7 +107,31 @@ class Detector:
         self.reload()
 
     def reload(self):
-        self.b = joblib.load(MODEL_PATH)
+        if not os.path.exists(MODEL_PATH):
+            ensure_model()
+        try:
+            payload = joblib.load(MODEL_PATH)
+        except Exception as exc:  # pragma: no cover - defensive around stale/partial artifacts
+            raise RuntimeError(f"Unable to load detector model from {MODEL_PATH}: {exc}") from exc
+        if not isinstance(payload, dict) or "model" not in payload or "class_stats" not in payload:
+            raise ValueError(f"Model artifact at {MODEL_PATH} is missing expected detector metadata.")
+
+        if payload.get("artifact_format") != MODEL_FORMAT_VERSION or payload.get("sklearn_version") != sklearn.__version__:
+            warnings.warn(
+                f"Detector artifact for scikit-learn {payload.get('sklearn_version', 'unknown')} is incompatible with runtime {sklearn.__version__}; retraining the model.",
+                UserWarning,
+                stacklevel=2,
+            )
+            if os.path.exists(DATA_PATH):
+                base_df = pd.read_csv(DATA_PATH)
+            else:
+                from .simulator import build_dataset
+                base_df = build_dataset()
+                base_df.to_csv(DATA_PATH, index=False)
+            fit_and_save(base_df)
+            payload = joblib.load(MODEL_PATH)
+
+        self.b = payload
         self._mtime = os.path.getmtime(MODEL_PATH)
 
     def fresh(self):
@@ -114,8 +148,9 @@ class Detector:
         return float(min(np.sqrt(np.mean(((v - mu) / (sd + 0.05)) ** 2))
                          for mu, sd in self.b["class_stats"].values()))
 
-    def detect(self, feats):
+    def detect(self, feats, confidence_threshold=CONF_T, outlier_threshold=OUTLIER_T):
         self.fresh()
+        rule_based = detect_rules(feats)
         X = model_matrix(pd.DataFrame([feats]))
         proba = self.b["model"].predict_proba(X)[0]
         i = int(np.argmax(proba))
@@ -124,15 +159,16 @@ class Detector:
         reason = None
         if raw == "Unknown Suspicious":
             reason = "model label is 'Unknown Suspicious'"
-        elif conf < CONF_T:
+        elif conf < confidence_threshold:
             reason = f"low model confidence ({conf:.0%})"
-        elif nov > OUTLIER_T:
+        elif nov > outlier_threshold:
             reason = f"outlier: distance {nov:.1f} from every known class"
         attack_type = "Unknown Suspicious" if reason else raw
         return {"attack_type": attack_type, "confidence": round(conf, 3),
                 "risk": risk_label(risk_score(attack_type, conf, nov)),
                 "raw_label": raw, "novelty": round(nov, 2), "is_unknown": reason is not None,
                 "unknown_reason": reason,
+                "rule_based": rule_based,
                 "probabilities": {str(c): round(float(p), 3) for c, p in zip(self.b["model"].classes_, proba) if p > 0.01}}
 
 

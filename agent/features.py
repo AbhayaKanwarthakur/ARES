@@ -9,6 +9,8 @@ from collections import Counter
 
 import numpy as np
 
+from .event_schema import validate_event
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA_DIR = os.path.join(ROOT, "data")
 MODEL_DIR = os.path.join(ROOT, "models")
@@ -36,6 +38,10 @@ SIM_SCALE = 0.40  # RMS distance (in 0..1 space) at which similarity drops to 0
 
 def extract_features(events):
     """Aggregate a list of processed log events into one feature dict."""
+    if not events:
+        raise ValueError("events must contain at least one event")
+    for event in events:
+        validate_event(event)
     n = len(events)
     ports = [e["dst_port"] for e in events]
     logins = [e for e in events if e["event_type"] == "login"]
@@ -56,6 +62,21 @@ def extract_features(events):
         "special_char_ratio": round(mean("special_ratio"), 3),
         "distinct_ports": len(set(ports)),
     }
+
+
+def detect_rules(features):
+    """Return a rule-based detection without consulting simulator ground-truth labels."""
+    if features["failed_login_count"] >= 4 and features["login_frequency"] >= 0.5:
+        label, reason = "Brute Force", "repeated failed logins at a high rate"
+    elif features["distinct_ports"] >= 8:
+        label, reason = "Port Scan", "many distinct destination ports in one window"
+    elif features["packets_per_second"] >= 1000 or features["request_count"] >= 500:
+        label, reason = "Traffic Flood", "extreme packet or request volume"
+    elif features["packets_per_second"] >= 500:
+        label, reason = "Traffic Spike", "unusually high packet rate"
+    else:
+        label, reason = "Normal Traffic", "no baseline threshold was exceeded"
+    return {"label": label, "is_anomaly": label != "Normal Traffic", "reason": reason}
 
 
 def to_vector(f):

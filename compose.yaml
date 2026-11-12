@@ -1,0 +1,77 @@
+services:
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ares
+      POSTGRES_USER: ares
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    secrets:
+      - postgres_password
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ares -d ares"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    networks:
+      - internal
+    security_opt:
+      - no-new-privileges:true
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_HOST: postgres
+      DATABASE_PORT: "5432"
+      DATABASE_NAME: ares
+      DATABASE_USER: ares
+      DATABASE_PASSWORD_FILE: /run/secrets/postgres_password
+      ARES_API_KEYS_FILE: /run/secrets/api_keys.json
+      ARES_ENABLE_API_DOCS: "false"
+      ARES_MODEL_PATH: /app/models/api-detector.joblib
+      ARES_DATA_PATH: /app/data/attacks.csv
+    secrets:
+      - api_keys
+      - postgres_password
+    ports:
+      - "127.0.0.1:8000:8000"
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/ready', timeout=3)"
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+    networks:
+      - internal
+
+volumes:
+  postgres_data:
+
+secrets:
+  api_keys:
+    file: ./secrets/api_keys.json
+  postgres_password:
+    file: ./secrets/postgres_password.txt
+
+networks:
+  internal:
+    internal: true

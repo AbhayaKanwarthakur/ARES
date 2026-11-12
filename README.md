@@ -15,21 +15,53 @@ ATTACK LOG → DETECT → ANALYZE → DECIDE → RESPOND → REMEMBER → LEARN 
 - There is no code that accepts a target address, so it cannot be pointed at anything else.
 
 ## Install & run
+
+This repository now explicitly separates the two operating modes:
+
+- `demo` mode: local dashboard, synthetic traffic, and simulator-only features
+- `production` mode: the production API service path, guarded by runtime mode checks and policy controls
+
+### Demo mode (local simulation)
+#### Windows (PowerShell)
 ```bash
 cd adaptive-security-agent
-python -m venv .venv && source .venv/bin/activate      # Windows: .venv\Scripts\activate
-pip install -r requirements.txt
-python train.py            # optional: builds data/attacks.csv + models/detector.joblib (the app does it on first run)
+py -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -r requirements.txt
+python train.py            # optional: the app builds the model on first run
 python smoke_test.py       # optional: headless end-to-end test of the whole agent loop
-streamlit run app.py
+ARES_RUNTIME_MODE=demo python -m streamlit run app.py
 ```
+
+#### macOS / Linux
+```bash
+cd adaptive-security-agent
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements.txt
+python train.py            # optional: the app builds the model on first run
+python smoke_test.py       # optional: headless end-to-end test of the whole agent loop
+ARES_RUNTIME_MODE=demo python -m streamlit run app.py
+```
+
+### Production mode (security service path)
+```bash
+cd adaptive-security-agent
+# Requires a trusted deployment environment and validated secrets.
+set ARES_RUNTIME_MODE=production
+uvicorn api.main:app --host 0.0.0.0 --port 8000
+```
+
+The dashboard and synthetic simulator are intentionally unavailable in production mode. This prevents a demo system from being mistaken for an operational security system.
 
 ## Project layout
 ```
 app.py                 Streamlit SOC dashboard + Demo Attack Lab + Attack Replay
+agent/testing_mode.py  bounded automated scenario-vs-agent runs in the local sandbox
 train.py               builds the synthetic dataset and trains the baseline Random Forest
 smoke_test.py          headless test (temp DB, never touches your real memory/model)
 agent/features.py      event window → feature vector; normalisation; similarity
+agent/event_schema.py  validated synthetic events (RFC 5737 source addresses only)
 agent/simulator.py     local sandbox demo app + synthetic attack generators + dataset builder
 agent/detector.py      Random Forest + "is this unfamiliar?" check (low confidence / outlier)
 agent/analyzer.py      compares with memory, picks FAST / STANDARD / FULL analysis path, scores risk
@@ -38,8 +70,145 @@ agent/responder.py     SIMULATED defence execution + simulated outcome
 agent/memory.py        SQLite: incidents, patterns, action stats, defences, retraining log
 agent/learner.py       pattern learning, statistics, periodic REAL model retraining
 agent/pipeline.py      orchestrates the full loop and emits step-by-step events for the UI
+agent/settings.py      validated settings loader for persistent, dynamic runtime options
+config/settings.json   editable dashboard presets and detector / memory thresholds
+api/                   authenticated passive scoring API for approved website backends
+migrations/             versioned PostgreSQL schema migrations
 data/                  attacks.csv, security.log (sandbox log), memory.db (created at runtime)
 models/                detector.joblib
+```
+
+## Dynamic runtime settings
+The dashboard's **Agent settings** panel persists operating options in `config/settings.json`.
+Edit settings in the dashboard and select **Save settings**, or update that JSON file directly.
+It controls the existing confidence and novelty gates, memory-match threshold, analysis and
+dashboard animation delays, periodic retraining interval, replay defaults, and editable quick-launch presets.
+Quick-launch presets can be added, removed, or reordered and must use one of the synthetic
+scenario types already supported by the simulator.
+
+These settings do not replace the detector, analysis paths, response playbook, or the three
+documented adaptation mechanisms. They only tune the current thresholds and UI/runtime options.
+Memory and rule learning still do not alter model weights; only the existing Random Forest
+retraining operation does. Invalid settings are reported rather than silently replaced.
+
+## Testing Mode
+Open the dashboard's **Testing Mode** tab, choose built-in synthetic scenarios and rounds,
+then run the sandbox test. Each generated event batch goes to the in-process demo application
+and through the same detection, analysis, response, memory, and learning pipeline used by the
+Demo Attack Lab. The results show the selected scenario, agent response, simulated containment,
+and learning status. Runs are capped at 20 cases and use documentation-range source IPs.
+This mode does not include exploit code, accept targets, open sockets, or contact real systems.
+
+## Passive website integration service
+The API is a separate, opt-in backend service. It accepts a bounded **aggregate feature window**,
+not raw HTTP requests, logs, credentials, or target addresses. It returns a classification,
+confidence, novelty/risk assessment, and an action recommendation from the existing playbook.
+Recommendations are passive only: this service never executes a response. The endpoint requires
+a tenant-scoped bearer key, requires a client-generated UUID `event_id` for retry-safe
+idempotency, and persists score records in PostgreSQL. Reusing an event ID for the same tenant
+returns the existing result.
+
+The website's server-side backend is responsible for authenticating its users, aggregating
+appropriate security telemetry into the documented feature fields, calling this API over TLS,
+and handling its response. Do not call it with a browser-held API key. Do not forward secrets or
+full request bodies. The scores are prototype results, not a blocking policy or a production
+security guarantee.
+
+### Start the local Docker Compose pilot (Windows PowerShell)
+Install Docker Desktop, then from the project directory generate local-only secrets:
+
+```powershell
+python -c "import json,pathlib,secrets; p=pathlib.Path('secrets'); p.mkdir(exist_ok=True); (p/'postgres_password.txt').write_text(secrets.token_urlsafe(48), encoding='utf-8'); key=secrets.token_urlsafe(48); (p/'api_keys.json').write_text(json.dumps([{'key_id':'local-website','tenant_id':'website-local','secret':key}], indent=2), encoding='utf-8'); print('Website backend bearer key:', key)"
+docker compose up --build -d
+docker compose ps
+Invoke-RestMethod http://localhost:8000/health/ready
+```
+
+`secrets/` is excluded from Git. The database password is mounted as a Docker secret rather
+than passed in the API's environment. Store the generated bearer key only in the **website
+backend's** secret manager; never put it in frontend code. The Compose API port
+binds to localhost and its internal Docker network is private. Before remote deployment, place
+the service behind a TLS-terminating reverse proxy or private service network with ingress
+restrictions, request-rate limits, monitoring, and an operational secret-rotation process.
+Configure production PostgreSQL TLS, backups, retention, and restore testing. Do not expose
+PostgreSQL directly to the internet. The API container runs as non-root with a read-only
+filesystem, and the API's direct Python dependencies are pinned in `requirements-api.txt`.
+Review and update those pins through a tested dependency-update process; also pin base-image
+digests and scan images/dependencies before a real release. The detector file is a trusted
+joblib/pickle artifact: only load one produced and integrity-checked by your own trusted
+training/release pipeline, because loading an untrusted artifact can execute code.
+The detector now records its `scikit-learn` version and artifact format in the model payload,
+and automatically retrains if the saved artifact was created with a different runtime. This
+prevents stale model files from silently producing incompatible or warning-heavy predictions.
+
+### Score a synthetic/aggregated event window
+The endpoint is `POST /v1/windows/score`. Required features match the existing 11-feature
+classifier input:
+
+```json
+{
+  "event_id": "d5df90f9-e092-4f4b-9da4-5c4579d96dbe",
+  "features": {
+    "destination_port": 22,
+    "protocol": "SSH",
+    "packets_per_second": 35.0,
+    "failed_login_count": 8,
+    "request_count": 8,
+    "payload_length": 80.0,
+    "connection_duration": 0.6,
+    "unusual_port": 0.0,
+    "login_frequency": 2.0,
+    "special_char_ratio": 0.04,
+    "distinct_ports": 1
+  }
+}
+```
+
+The authenticated response includes `classification`, `confidence`, `risk`, `is_unknown`,
+`recommendation`, `recommendation_reason`, and the detector model's SHA-256 version. A
+recommendation describes what the playbook would suggest; no firewall, account, website, or
+simulated-defense state is changed by this API.
+
+For local API development only, install `requirements-api.txt`, provision the same environment
+variables and a local PostgreSQL database, apply `python -m alembic upgrade head`, then run
+`uvicorn api.main:app --host 127.0.0.1 --port 8000`. Interactive API docs are disabled by
+default; set `ARES_ENABLE_API_DOCS=true` only in a trusted local development environment.
+
+## Phase 3: reinforcement-learning pipeline
+The optional Gymnasium environment and Stable-Baselines3 DQN train exclusively on
+synthetic scenarios. Its seven-dimensional observation excludes scenario labels; reward
+feedback uses labels only inside the simulator. Actions are monitor, alert, simulated
+rate-limit, simulated temporary block, and human review. The environment documents its
+reward costs and efficacy in `agent/rl_env.py`; disruption penalties for false blocking
+are deliberately larger than verified-containment rewards, preventing a block-everything
+policy from maximizing reward.
+
+```powershell
+python -m pip install -r requirements.txt
+python train_rl.py --smoke
+python train_rl.py --timesteps 10000 --eval-episodes 50 --seed 7
+python -m unittest discover -s tests -v
+```
+
+Training saves `models/ares_dqn.zip`, episode reward/length rows to
+`data/ares_rl_episodes.csv`, and held-out trained-vs-fixed-rule metrics to
+`data/ares_rl_evaluation.json`. Both policies use the same held-out seeds; DQN
+evaluation is deterministic and does not update model parameters.
+
+## Simulation and detection baseline
+The simulator generates seeded, reproducible traffic windows including normal activity,
+port scans, brute-force login attempts, traffic spikes, and traffic floods. Legitimate
+unusual activity is also generated deliberately; its burst can be flagged by the
+rule-based baseline to demonstrate a false positive. `agent.event_schema` validates
+simulated events, and `agent.features` extracts agent-visible features and evaluates
+the rules. Simulator ground-truth labels are attached only to dataset rows as
+`attack_type`; they are not included in event dictionaries or extracted features.
+The existing Random Forest remains the main classifier, with the rule baseline shown
+alongside its output.
+
+Run the Phase 2 tests from the project directory:
+```bash
+python -m unittest discover -s tests -v
 ```
 
 ## Architecture

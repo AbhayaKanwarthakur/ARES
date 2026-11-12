@@ -1,0 +1,69 @@
+{
+  "version": 1,
+  "detector": {
+    "confidence_threshold": 0.65,
+    "outlier_threshold": 3.0
+  },
+  "analysis": {
+    "memory_match_threshold": 0.9
+  },
+  "dashboard": {
+    "thinking_delay_enabled": true,
+    "thinking_delay_seconds": 0.22,
+    "step_animation_delay_seconds": 0.45,
+    "auto_retrain_every": 10,
+    "default_event_count": 20,
+    "default_intensity": 5,
+    "default_variation": 0.15,
+    "quick_launch": [
+      {
+        "label": "Simulate Brute Force",
+        "kind": "Brute Force",
+        "events": 12,
+        "intensity": 5,
+        "variation": 0.15,
+        "mutated": false
+      },
+      {
+        "label": "Simulate Port Scan",
+        "kind": "Port Scan",
+        "events": 25,
+        "intensity": 5,
+        "variation": 0.15,
+        "mutated": false
+      },
+      {
+        "label": "Simulate SQL Injection Attempt",
+        "kind": "SQL Injection",
+        "events": 10,
+        "intensity": 5,
+        "variation": 0.15,
+        "mutated": false
+      },
+      {
+        "label": "Simulate DDoS-like Traffic Spike",
+        "kind": "DDoS",
+        "events": 15,
+        "intensity": 5,
+        "variation": 0.15,
+        "mutated": false
+      },
+      {
+        "label": "Simulate Unknown/Novel Attack",
+        "kind": "Novel Attack",
+        "events": 10,
+        "intensity": 5,
+        "variation": 0.15,
+        "mutated": false
+      },
+      {
+        "label": "Generate Normal Traffic",
+        "kind": "Normal Traffic",
+        "events": 12,
+        "intensity": 5,
+        "variation": 0.15,
+        "mutated": false
+      }
+    ]
+  }
+}
