@@ -115,7 +115,6 @@ st.markdown(CSS, unsafe_allow_html=True)
 
 with st.sidebar:
     st.markdown("## Agent settings")
-    st.caption(f"Saved in `{SETTINGS_PATH}`")
     with st.form("agent_settings"):
         pace = st.checkbox("Show agent 'thinking' delay", value=dashboard_settings["thinking_delay_enabled"],
                            help="Cosmetic pacing so the audience can follow each step. Turn off for raw speed.")
@@ -233,7 +232,8 @@ with st.sidebar:
     st.caption("All attacks are synthetic and run inside a local in-process sandbox. "
                "Defences are simulated (a SQLite table). Nothing leaves this machine.")
 
-st.markdown('<div class="hdr"><h1>ADAPTIVE SECURITY AGENT</h1><span class="live">SOC LIVE</span></div>', unsafe_allow_html=True)
+st.markdown('<div class="hdr"><h1>ADAPTIVE SECURITY AGENT</h1><span class="live">SOC LIVE · DEMO SIMULATION</span></div>', unsafe_allow_html=True)
+st.caption("Safe local demonstration: all attacks are synthetic and every defense action is simulated.")
 if ss.flash:
     st.success(ss.flash)
     ss.flash = None

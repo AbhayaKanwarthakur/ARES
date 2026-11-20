@@ -52,6 +52,17 @@ set ARES_RUNTIME_MODE=production
 uvicorn api.main:app --host 0.0.0.0 --port 8000
 ```
 
+### VS Code
+Open the `adaptive-security-agent` folder itself in VS Code, then select its
+Python virtual environment with **Python: Select Interpreter**. Use **Run and
+Debug → Run Adaptive Security Agent** to start the Streamlit dashboard. The
+included VS Code tasks also provide commands for the full unit-test suite and
+the headless smoke test.
+
+For a short presentation walkthrough, see [`DEMO_SCRIPT.md`](DEMO_SCRIPT.md).
+The recording helpers in `tools/record_screen.py` and `tools/compose_demo_video.py`
+can create a screen-captured MP4 with informative title cards.
+
 The dashboard and synthetic simulator are intentionally unavailable in production mode. This prevents a demo system from being mistaken for an operational security system.
 
 ## Project layout
